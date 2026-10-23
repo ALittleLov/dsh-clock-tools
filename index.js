@@ -8,12 +8,26 @@
  * 零 DSH 包依赖：只用 node 内置模块与 ctx 服务。
  */
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir, uptime as osUptime } from 'node:os';
 import { randomUUID } from 'node:crypto';
 
 export const name = 'clock-tools';
 export const inject = ['agents', 'tools'];
+
+// Linux 每次系统启动生成一个新 boot_id；Windows/macOS 没有这个文件，读取失败返回 null。
+function readPlatformBootId() {
+  if (process.platform !== 'linux') return null;
+  try {
+    const id = readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
+    return id.length > 0 ? id : null;
+  } catch {
+    return null;
+  }
+}
+
+let platformBootId = readPlatformBootId();
 
 let bootId = randomUUID();
 let clock = {
@@ -22,9 +36,11 @@ let clock = {
   uptime: () => osUptime(),
   startMono: 0,
   startUptime: 0,
+  startWall: 0,
 };
 clock.startMono = clock.mono();
 clock.startUptime = clock.uptime();
+clock.startWall = clock.wall();
 
 const WALL_JUMP_THRESHOLD_MS = 2000;
 const BOOT_TOLERANCE_MS = 2000;
@@ -32,7 +48,7 @@ const DEFAULT_LIST_LIMIT = 10;
 const MAX_LIST_LIMIT = 50;
 
 const TASK_STATUS = new Set(['running', 'completed', 'aborted', 'uncertain']);
-const CONTINUITY = new Set(['continuous', 'resumed', 'restarted', 'clock-changed', 'unknown']);
+const CONTINUITY = new Set(['continuous', 'resumed', 'resumed-gap', 'restarted', 'clock-changed', 'unknown']);
 
 // ---------------------------------------------------------------------------
 // 时间格式化
@@ -104,7 +120,16 @@ function normalizeTask(raw) {
     startedBootWall: typeof raw.startedBootWall === 'number' ? raw.startedBootWall : null,
     lastSeenUptime: typeof raw.lastSeenUptime === 'number' ? raw.lastSeenUptime : null,
     lastSeenMono: typeof raw.lastSeenMono === 'number' ? raw.lastSeenMono : null,
+    lastSeenWall: typeof raw.lastSeenWall === 'number' ? raw.lastSeenWall : null,
     lastSeenBootId: typeof raw.lastSeenBootId === 'string' ? raw.lastSeenBootId : '',
+    accumulatedMs: typeof raw.accumulatedMs === 'number' ? raw.accumulatedMs : 0,
+    platformBootId: typeof raw.platformBootId === 'string' ? raw.platformBootId : '',
+    bridgeContinuity: typeof raw.bridgeContinuity === 'string' ? raw.bridgeContinuity : '',
+    baseBootId: typeof raw.baseBootId === 'string' ? raw.baseBootId : (typeof raw.bootId === 'string' ? raw.bootId : ''),
+    baseMono: typeof raw.baseMono === 'number' ? raw.baseMono : (typeof raw.startedMono === 'number' ? raw.startedMono : null),
+    baseUptime: typeof raw.baseUptime === 'number' ? raw.baseUptime : (typeof raw.startedUptime === 'number' ? raw.startedUptime : null),
+    baseWall: typeof raw.baseWall === 'number' ? raw.baseWall : raw.startedWall,
+    baseBootWall: typeof raw.baseBootWall === 'number' ? raw.baseBootWall : (typeof raw.startedBootWall === 'number' ? raw.startedBootWall : null),
     bootId: typeof raw.bootId === 'string' ? raw.bootId : '',
     endedWall: typeof raw.endedWall === 'number' ? raw.endedWall : null,
     endedMono: typeof raw.endedMono === 'number' ? raw.endedMono : null,
@@ -122,51 +147,71 @@ function newTaskId() {
 function computeElapsed(record, nowWall, nowMono) {
   const nowUptime = clock.uptime();
   const nowBootWall = nowWall - nowUptime * 1000;
-  const elapsedWall = nowWall - record.startedWall;
+  const accumulated = typeof record.accumulatedMs === 'number' ? record.accumulatedMs : 0;
 
-  // 同一进程：单调时钟，最高精度。
-  if (record.bootId === bootId && record.startedMono !== null) {
-    const elapsedMono = Math.max(0, nowMono - record.startedMono);
-    const wallJump = Math.abs(elapsedWall - elapsedMono) > WALL_JUMP_THRESHOLD_MS;
+  // 同进程基准：单调时钟差。
+  if (record.baseBootId === bootId && typeof record.baseMono === 'number') {
+    const seg = nowMono - record.baseMono;
+    if (seg < 0) return { elapsedMs: null, basis: 'unknown', continuity: 'unknown', wallJump: true };
+    const elapsed = accumulated + seg;
+    // 只比较「本段」的墙钟差与单调差，不能拿总累计耗时去比。
+    const baseWall = typeof record.baseWall === 'number' ? record.baseWall : record.startedWall;
+    const wallSeg = nowWall - baseWall;
+    const wallJump = Math.abs(wallSeg - seg) > WALL_JUMP_THRESHOLD_MS;
+    const bridge = typeof record.bridgeContinuity === 'string' ? record.bridgeContinuity : '';
     return {
-      elapsedMs: elapsedMono,
+      elapsedMs: elapsed,
       basis: 'monotonic',
-      continuity: wallJump ? 'clock-changed' : 'continuous',
+      continuity: wallJump ? 'clock-changed' : (bridge !== '' ? bridge : 'continuous'),
       wallJump,
     };
   }
 
-  // 同一系统启动周期、跨 DSH 进程：用系统运行时间桥接空档。
-  const sameBoot = typeof record.startedBootWall === 'number'
-    && Math.abs(nowBootWall - record.startedBootWall) <= BOOT_TOLERANCE_MS;
-  if (
-    sameBoot
-    && record.lastSeenBootId === record.bootId
-    && typeof record.lastSeenUptime === 'number'
-    && typeof record.lastSeenMono === 'number'
-    && record.startedMono !== null
-  ) {
-    const segBefore = record.lastSeenMono - record.startedMono;
-    const segGap = (clock.startUptime - record.lastSeenUptime) * 1000;
-    const segAfter = nowMono - clock.startMono;
-    if (segBefore >= 0 && segGap >= 0 && segAfter >= 0) {
-      const elapsed = segBefore + segGap + segAfter;
+  // 跨 DSH 进程、同一系统启动周期：桥接到新进程启动时刻。
+  const sameBoot = platformBootId !== null && record.platformBootId
+    ? platformBootId === record.platformBootId
+    : typeof record.baseBootWall === 'number'
+      && Math.abs(nowBootWall - record.baseBootWall) <= BOOT_TOLERANCE_MS;
+  if (sameBoot && typeof record.baseUptime === 'number') {
+    const gap = (clock.startUptime - record.baseUptime) * 1000;
+    const seg = nowMono - clock.startMono;
+    if (gap >= 0 && seg >= 0) {
+      const elapsed = accumulated + gap + seg;
       return {
         elapsedMs: elapsed,
         basis: 'uptime-bridge',
         continuity: 'resumed',
-        wallJump: Math.abs(elapsedWall - elapsed) > WALL_JUMP_THRESHOLD_MS,
+        wallJump: false,
       };
     }
   }
 
-  // 系统重启过或无法桥接：墙钟估算。
-  if (elapsedWall < 0) return { elapsedMs: null, basis: 'unknown', continuity: 'unknown', wallJump: true };
-  return { elapsedMs: elapsedWall, basis: 'wall-clock', continuity: 'restarted', wallJump: false };
+  // 系统重启：重启前累计 + 到新进程启动的空档（墙钟估算）+ 新进程内耗时。
+  if (typeof record.baseWall === 'number') {
+    const gap = clock.startWall - record.baseWall;
+    const seg = nowMono - clock.startMono;
+    if (gap >= 0 && seg >= 0) {
+      const elapsed = accumulated + gap + seg;
+      const wallElapsed = nowWall - record.startedWall;
+      return {
+        elapsedMs: elapsed,
+        basis: 'restart-bridge',
+        continuity: 'resumed-gap',
+        wallJump: Math.abs(wallElapsed - elapsed) > WALL_JUMP_THRESHOLD_MS,
+        gapEstimated: true,
+      };
+    }
+  }
+
+  // 无法桥接：退回整段墙钟估算，或 unknown。
+  const wallElapsed = nowWall - record.startedWall;
+  if (wallElapsed < 0) return { elapsedMs: null, basis: 'unknown', continuity: 'unknown', wallJump: true };
+  return { elapsedMs: wallElapsed, basis: 'wall-clock', continuity: 'restarted', wallJump: false };
 }
 
 function continuityNote(continuity) {
   if (continuity === 'resumed') return 'DSH restarted during this task; elapsed was bridged with system uptime (same OS session).';
+  if (continuity === 'resumed-gap') return 'the OS restarted during this task; the pre-restart and post-restart segments are measured, the shutdown gap is a wall-clock estimate.';
   if (continuity === 'restarted') return 'DSH restarted during this task; the monotonic clock did not survive, so elapsed is a wall-clock estimate.';
   if (continuity === 'clock-changed') return 'the wall clock changed during this task; elapsed uses the monotonic clock.';
   return 'clock continuity is unknown; elapsed may be unreliable.';
@@ -175,6 +220,7 @@ function continuityNote(continuity) {
 function continuityBasis(continuity) {
   if (continuity === 'continuous') return 'monotonic, host-measured';
   if (continuity === 'resumed') return 'resumed, uptime-bridged';
+  if (continuity === 'resumed-gap') return 'resumed, gap estimated';
   if (continuity === 'restarted') return 'wall clock, restarted';
   if (continuity === 'clock-changed') return 'monotonic; wall clock changed';
   return 'unknown';
@@ -184,6 +230,10 @@ export function apply(ctx, config = {}) {
   const resolved = resolveZone(config?.timeZone || undefined);
   const zone = resolved.zone;
   const formatter = resolved.formatter;
+
+  // 平台适配点：默认自动检测（Linux 读 boot_id，其他回退墙钟推断）。
+  // 可通过插件配置 platformBootToken 手动覆盖，例如在未验证平台上自行提供启动标识。
+  if (typeof config?.platformBootToken === 'string') platformBootId = config.platformBootToken;
 
   const tasks = new Map();
   const sessionTasks = new Map();
@@ -211,13 +261,39 @@ export function apply(ctx, config = {}) {
     persist();
   }
 
-  function markSeen(record, nowMono) {
-    // 跨进程记录保留旧进程的最后锚点：它是 uptime 桥接的起点，不能被新进程覆盖。
-    if (record.bootId !== bootId) return;
-    record.lastSeenUptime = clock.uptime();
+  function checkpoint(record) {
+    const nowWall = clock.wall();
+    const nowMono = clock.mono();
+    const elapsed = computeElapsed(record, nowWall, nowMono);
+    if (elapsed.elapsedMs === null) return;
+    const uptimeNow = clock.uptime();
+    record.accumulatedMs = elapsed.elapsedMs;
+    record.platformBootId = platformBootId ?? '';
+    if (elapsed.continuity === 'resumed' || elapsed.continuity === 'resumed-gap') {
+      record.bridgeContinuity = elapsed.continuity;
+    }
+    record.baseBootId = bootId;
+    record.baseMono = nowMono;
+    record.baseUptime = uptimeNow;
+    record.baseWall = nowWall;
+    record.baseBootWall = nowWall - uptimeNow * 1000;
+    record.lastSeenWall = nowWall;
     record.lastSeenMono = nowMono;
+    record.lastSeenUptime = uptimeNow;
     record.lastSeenBootId = bootId;
     persist();
+  }
+
+  const CHECKPOINT_MS = 10_000;
+  let checkpointTimer = null;
+  function startCheckpointTimer() {
+    if (checkpointTimer !== null) return;
+    checkpointTimer = setInterval(() => {
+      for (const record of tasks.values()) {
+        if (record.status === 'running') checkpoint(record);
+      }
+    }, CHECKPOINT_MS);
+    checkpointTimer.unref?.();
   }
 
   async function loadStore() {
@@ -273,7 +349,7 @@ export function apply(ctx, config = {}) {
     if (record.plannedMs !== null) {
       lines.push(`Planned: ${formatDuration(record.plannedMs)}`);
       if (record.actualMs !== null) {
-        const note = record.continuity === 'continuous' ? '' : record.continuity === 'resumed' ? ' (resumed)' : ' (estimated)';
+        const note = record.continuity === 'continuous' ? '' : record.continuity === 'resumed' ? ' (resumed)' : record.continuity === 'resumed-gap' ? ' (gap estimated)' : ' (estimated)';
         lines.push(`Variance: ${formatSignedMs(record.actualMs - record.plannedMs)}${note}`);
       }
     }
@@ -327,7 +403,7 @@ export function apply(ctx, config = {}) {
         if (running?.status === 'running') {
           const elapsed = computeElapsed(running, nowWall, nowMono);
           lines.push(`Running task ${running.taskId}: ${elapsed.elapsedMs === null ? 'unknown' : formatDuration(elapsed.elapsedMs)} elapsed`);
-          markSeen(running, nowMono);
+          checkpoint(running);
         }
         return { text: lines.join('\n') };
       }
@@ -348,7 +424,16 @@ export function apply(ctx, config = {}) {
           startedBootWall: nowWall - startedUptime * 1000,
           lastSeenUptime: startedUptime,
           lastSeenMono: nowMono,
+          lastSeenWall: nowWall,
           lastSeenBootId: bootId,
+          accumulatedMs: 0,
+          platformBootId: platformBootId ?? '',
+          bridgeContinuity: '',
+          baseBootId: bootId,
+          baseMono: nowMono,
+          baseUptime: startedUptime,
+          baseWall: nowWall,
+          baseBootWall: nowWall - startedUptime * 1000,
           bootId,
           endedWall: null,
           endedMono: null,
@@ -366,7 +451,7 @@ export function apply(ctx, config = {}) {
         if (record === undefined) return { text: 'No matching task record. Start one with task_clock action=start.' };
         if (record.status !== 'running') return { text: describeFinished(record) };
         const text = describeRunning(record, nowWall, nowMono);
-        markSeen(record, nowMono);
+        checkpoint(record);
         return { text };
       }
 
@@ -401,7 +486,7 @@ export function apply(ctx, config = {}) {
         let duration;
         if (record.status === 'running') {
           const elapsed = computeElapsed(record, nowWall, nowMono);
-          markSeen(record, nowMono);
+          checkpoint(record);
           if (elapsed.elapsedMs === null) {
             duration = 'unknown';
           } else {
@@ -409,7 +494,9 @@ export function apply(ctx, config = {}) {
               ? ''
               : elapsed.continuity === 'resumed'
                 ? ' (resumed, uptime-bridged)'
-                : elapsed.continuity === 'restarted'
+                : elapsed.continuity === 'resumed-gap'
+                  ? ' (resumed, gap estimated)'
+                  : elapsed.continuity === 'restarted'
                   ? ' (restarted, estimated)'
                   : elapsed.continuity === 'clock-changed'
                     ? ' (wall clock changed)'
@@ -443,6 +530,8 @@ export function apply(ctx, config = {}) {
     for (const dispose of owned.values()) dispose();
     owned.clear();
   });
+
+  startCheckpointTimer();
 }
 
 export const _internals = {
@@ -452,5 +541,6 @@ export const _internals = {
   computeElapsed,
   normalizeTask,
   setBootId: (next) => { bootId = next; },
+  setPlatformBootId: (next) => { platformBootId = next; },
   setClock: (next) => { clock = { ...clock, ...next }; },
 };
