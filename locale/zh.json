@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "DSH Clock Tools",
-    "description": "Host-measured task timing for DSH agents: a task_clock tool that does not touch presets"
+    "description": "由宿主单调时钟测量任务实际耗时；提供 now 查询当前时间，不注入时间消息、不修改任何 preset。"
   }
 }

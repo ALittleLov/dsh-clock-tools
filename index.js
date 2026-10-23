@@ -1,7 +1,7 @@
 /**
  * dsh-clock-tools — 任务计时的独立插件（第一层：Clock Tools）。
  *
- * 只提供 `task_clock`（start / check / finish / list），不注入任何时间消息、
+ * 只提供 `task_clock`（start / check / finish / list / now），不注入任何时间消息、
  * 不覆盖任何 preset。通过 `agent/created` 把工具注册到每个顶层 Agent 的
  * 作用域，因此在同一 Profile 下使用不同 preset 的 Agent 都能用。
  *
