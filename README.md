@@ -4,7 +4,7 @@
 
 为 DSH 本地 AI Agent 提供可核实的任务计时能力，把预计耗时、实际耗时和任务状态分开管理。
 
-> **项目状态**：0.1.5 已发布到 GitHub（[仓库](https://github.com/ALittleLov/dsh-clock-tools) · [Releases](https://github.com/ALittleLov/dsh-clock-tools/releases)）。
+> **项目状态**：0.1.6 已发布到 GitHub（[仓库](https://github.com/ALittleLov/dsh-clock-tools) · [Releases](https://github.com/ALittleLov/dsh-clock-tools/releases)）。
 >
 > **已验证环境**：DSH 0.2.1-rc.2（仅此版本实测；其他版本未验证）。
 
@@ -260,18 +260,19 @@ Variance: -18m 2s
 1. Agent 必须主动调用计时工具；插件不会自动开始或结束计时。
 2. 没有自动超时中止功能：它只测量和报告耗时，不拥有中止 DSH 任务的权限。
 3. 预计耗时是预测，不是测量。
+4. **插件不能强制 Agent 调用 `now`**：工具描述里写了「报时间前必须查、不要复用旧结果」，但这只是提示，模型仍可能不查而自行推算。真正强制需要宿主层支持。
 
 ### 时间可信度与精度
 
-4. 系统重启后重启前、后的两段是精确的，关机空档只能估算，标 `resumed, gap estimated`；墙钟回退到无法桥接时返回 `unknown`。
-5. 墙钟被改到无法桥接、且分段也不成立时返回 `unknown`，不编造数值。
-6. 显示值按整秒向下取整，不等同内部毫秒精度（原始值在 `tasks.json`）。
-7. `now` 读本机系统时钟；如果系统时间本身被调错，它也会给出错误时刻——它解决的是“不要自己估算”，不是“校准时间”。
+5. 系统重启后重启前、后的两段是精确的，关机空档只能估算，标 `resumed, gap estimated`；墙钟回退到无法桥接时返回 `unknown`。
+6. 墙钟被改到无法桥接、且分段也不成立时返回 `unknown`，不编造数值。
+7. 显示值按整秒向下取整，不等同内部毫秒精度（原始值在 `tasks.json`）。
+8. `now` 读本机系统时钟；如果系统时间本身被调错，它也会给出错误时刻——它解决的是“不要自己估算”，不是“校准时间”。
 
 ### 测试与成本边界
 
-8. 四种 preset 的验证不等于所有 DSH 版本 / Profile / 平台均已验证；`now` 目前只在 Standard 实测。
-9. 工具 Schema 会增加模型输入 Token（约 300 / 请求为估算，未实测）。
+9. 四种 preset 的验证不等于所有 DSH 版本 / Profile / 平台均已验证；`now` 目前只在 Standard 实测。
+10. 工具 Schema 会增加模型输入 Token（约 300 / 请求为估算，未实测）。
 
 ## 测试
 
@@ -285,7 +286,7 @@ Variance: -18m 2s
 
 ## 版本与发布信息
 
-- **当前版本**：0.1.5
+- **当前版本**：0.1.6
 - **支持 DSH**：0.2.1-rc.2（实测）
 - **许可证**：MIT（见 `LICENSE`）
 - **问题反馈 / 更新日志**：GitHub Issues 与 Releases（见仓库链接）。
