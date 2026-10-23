@@ -4,7 +4,7 @@
 
 为 DSH 本地 AI Agent 提供可核实的任务计时能力，把预计耗时、实际耗时和任务状态分开管理。
 
-> **项目状态**：0.1.3 已发布到 GitHub（[仓库](https://github.com/ALittleLov/dsh-clock-tools) · [Releases](https://github.com/ALittleLov/dsh-clock-tools/releases)）。
+> **项目状态**：0.1.4 已发布到 GitHub（[仓库](https://github.com/ALittleLov/dsh-clock-tools) · [Releases](https://github.com/ALittleLov/dsh-clock-tools/releases)）。
 >
 > **已验证环境**：DSH 0.2.1-rc.2（仅此版本实测；其他版本未验证）。
 
@@ -115,10 +115,23 @@ Variance = actualMs - plannedMs
 |---|---|
 | 连续运行（同一进程） | 单调时钟差值，`continuity: continuous` |
 | 墙钟发生跳变 | `continuity: clock-changed`，仍用单调时钟，标注墙钟变化 |
-| 进程重启 | `continuity: restarted`，用墙钟估算并注明“process restarted” |
+| 仅重启 DSH（系统未重启） | `continuity: resumed`：重启前后用单调时钟，空档用系统运行时间桥接，标注 `(resumed, uptime-bridged)` |
+| 系统也重启 / 墙钟被改到无法确认 | `continuity: restarted`：用墙钟估算，标注 `(estimated)` |
 | 墙钟回退、无法估算 | `actualMs: null`，状态 `uncertain`，不编造耗时 |
 
-跨重启的结果只是估算，不能等同于连续运行时的单调时钟结果。插件也不声称能抵御所有系统级计时篡改。
+跨重启的估算结果不能等同于连续运行时的单调时钟结果。插件也不声称能抵御所有系统级计时篡改。
+
+### 跨重启续计时（0.1.4）
+
+DSH 重启会结束进程，单调时钟起点随之丢失。0.1.4 起：
+
+- 任务开始时记录系统运行时间（`os.uptime()`）与反推的系统启动墙钟。
+- 下次启动时，如果系统启动周期没变（启动墙钟差 ≤ 2 秒），用系统运行时间桥接「进程不在」的空档。
+- 总耗时 = 重启前（单调时钟）+ 空档（系统运行时间，Windows 实测约 16ms 分辨率）+ 重启后（单调时钟）。
+- 系统启动周期变了，或墙钟被改到无法确认，退回墙钟估算并标 `(estimated)`，不假装精确。
+- 每次调用顺手更新 `lastSeen`；异常退出（任务管理器强杀、崩溃）时用它兜底，最多丢几秒。
+
+`Actual` 的含义始终是 **`start` 到 `finish` 的总经过时间**，包含 DSH 关闭期间和系统睡眠时间；它不是 Agent 实际执行工作的时间。
 
 ## 安装
 
@@ -215,7 +228,7 @@ Variance: -18m 2s
 
 - **无网络请求**：只使用 Node 内置模块（`fs` / `path` / `os` / `crypto`）与 `Intl`，没有 `fetch`、HTTP 客户端或遥测。
 - 任务记录路径：`~/.dsh/clock-context/tasks.json`。
-- 记录字段包含：`taskId`、`sessionId`、`label`（用户/模型提供的标签，会写入文件）、`plannedMs`、`startedWall`、`startedMono`、`bootId`、`endedWall`、`endedMono`、`actualMs`、`wallJump`、`continuity`、`createdAt`。
+- 记录字段包含：`taskId`、`sessionId`、`label`（用户/模型提供的标签，会写入文件）、`plannedMs`、`startedWall`、`startedMono`、`startedUptime`、`startedBootWall`、`lastSeenUptime`、`lastSeenMono`、`lastSeenBootId`、`bootId`、`endedWall`、`endedMono`、`actualMs`、`wallJump`、`continuity`、`createdAt`。
 - 数据不自动过期；卸载插件不会删除记录。
 - 删除方法：完全退出 DSH 后删除 `~/.dsh/clock-context/` 目录。
 
@@ -229,7 +242,7 @@ Variance: -18m 2s
 
 ### 时间可信度与精度
 
-4. 单调时钟不能跨进程重启延续；重启后的数值来自墙钟估算，标注 `restarted` / `(estimated)`。
+4. 只有「仅重启 DSH、系统未重启」才能桥接续算；系统重启或墙钟被改到无法确认时退回墙钟估算，标注 `restarted` / `(estimated)`。
 5. 墙钟回退到无法可靠估算时返回 `unknown`，不编造数值。
 6. 显示值按整秒向下取整，不等同内部毫秒精度（原始值在 `tasks.json`）。
 7. `now` 读本机系统时钟；如果系统时间本身被调错，它也会给出错误时刻——它解决的是“不要自己估算”，不是“校准时间”。
@@ -241,15 +254,16 @@ Variance: -18m 2s
 
 ## 测试
 
-- 单元测试：10 个（含 `now`、`list` running 任务走单调时钟、墙钟跳变、进程重启、墙钟回退）。
+- 单元测试：**13 个**（新增跨进程 uptime 桥接、系统重启退回墙钟、墙钟被改保守降级）。
 - 发行包解压后从目录加载：`SMOKE_OK`。
 - 四种 preset 真实会话：Standard / Cordis / Minimal / PTC 均完成 start → check → finish → list。
+- **真实跨重启（0.1.4）**：正常关闭 DSH → 约 30 秒后重开 → `check` 显示 `Elapsed: 1m 6s (resumed, uptime-bridged)`，`finish` 保持 `Actual: 1m 10s (resumed, uptime-bridged)`，与「重启前 + 空档 + 重启后」一致。
 
-未测试：其他 DSH 版本、其他 Profile、macOS / Linux、npm/GitHub 安装链路、Tool Schema 的真实 Token 用量。
+未测试：任务管理器强杀、崩溃恢复、Windows 重启后恢复旧任务、系统时间前拨/回拨、睡眠/休眠、其他 DSH 版本、其他 Profile、macOS / Linux、npm/GitHub 安装链路、Tool Schema 的真实 Token 用量。
 
 ## 版本与发布信息
 
-- **当前版本**：0.1.3
+- **当前版本**：0.1.4
 - **支持 DSH**：0.2.1-rc.2（实测）
 - **许可证**：MIT（见 `LICENSE`）
 - **问题反馈 / 更新日志**：GitHub Issues 与 Releases（见仓库链接）。

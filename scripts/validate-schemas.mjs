@@ -3,12 +3,12 @@
  * 运行：ELECTRON_RUN_AS_NODE=1 "<DSH exe>" scripts/validate-schemas.mjs
  */
 import { pathToFileURL } from 'node:url';
-import { dirname, resolve } from 'node:path';
+import { resolve, dirname } from 'node:path';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const ASAR = process.env.DSH_ASAR ?? resolve(dirname(process.execPath), 'resources', 'app.asar');
+const ASAR = process.env.DSH_ASAR ?? resolve(dirname(process.execPath), 'resources/app.asar');
 const jsonSchema = await import(pathToFileURL(resolve(ASAR, 'dsh/node_modules/@deepseek-ai/dsh-tools/lib/types/json-schema.js')).href);
 const { assertSupportedJsonSchema, assertObjectJsonSchema } = jsonSchema;
 
