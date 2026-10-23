@@ -4,7 +4,7 @@
 
 为 DSH 本地 AI Agent 提供可核实的任务计时能力，把预计耗时、实际耗时和任务状态分开管理。
 
-> **项目状态**：0.1.2 已发布到 GitHub（[仓库](https://github.com/ALittleLov/dsh-clock-tools) · [Releases](https://github.com/ALittleLov/dsh-clock-tools/releases)）。
+> **项目状态**：0.1.3 已发布到 GitHub（[仓库](https://github.com/ALittleLov/dsh-clock-tools) · [Releases](https://github.com/ALittleLov/dsh-clock-tools/releases)）。
 >
 > **已验证环境**：DSH 0.2.1-rc.2（仅此版本实测；其他版本未验证）。
 
@@ -221,19 +221,27 @@ Variance: -18m 2s
 
 ## 已知限制
 
+### 行为限制（设计上不承诺）
+
 1. Agent 必须主动调用计时工具；插件不会自动开始或结束计时。
-2. 预计耗时是预测，不是测量。
-3. 单调时钟不能跨进程重启延续。
-4. 重启后的墙钟估算结果必须标记不确定性。
-5. 显示值为整秒向下取整，不等于内部毫秒精度。
-6. 四种 preset 的验证不等于所有 DSH 版本、所有 Profile、所有平台均已验证。
-7. 工具 Schema 会增加模型输入 Token（估算值，未实测）。
-8. 没有自动超时中止功能。
-9. `now` 读的是本机系统时钟；如果系统时间本身被调错，它也会给出错误时刻——它解决的是“不要自己估算”，不是“校准时间”。
+2. 没有自动超时中止功能：它只测量和报告耗时，不拥有中止 DSH 任务的权限。
+3. 预计耗时是预测，不是测量。
+
+### 时间可信度与精度
+
+4. 单调时钟不能跨进程重启延续；重启后的数值来自墙钟估算，标注 `restarted` / `(estimated)`。
+5. 墙钟回退到无法可靠估算时返回 `unknown`，不编造数值。
+6. 显示值按整秒向下取整，不等同内部毫秒精度（原始值在 `tasks.json`）。
+7. `now` 读本机系统时钟；如果系统时间本身被调错，它也会给出错误时刻——它解决的是“不要自己估算”，不是“校准时间”。
+
+### 测试与成本边界
+
+8. 四种 preset 的验证不等于所有 DSH 版本 / Profile / 平台均已验证；`now` 目前只在 Standard 实测。
+9. 工具 Schema 会增加模型输入 Token（约 300 / 请求为估算，未实测）。
 
 ## 测试
 
-- 单元测试：7 个（时长格式化、投影/状态边界、任务流程、墙钟跳变、进程重启、墙钟回退、无记录时 list）。
+- 单元测试：10 个（含 `now`、`list` running 任务走单调时钟、墙钟跳变、进程重启、墙钟回退）。
 - 发行包解压后从目录加载：`SMOKE_OK`。
 - 四种 preset 真实会话：Standard / Cordis / Minimal / PTC 均完成 start → check → finish → list。
 
@@ -241,7 +249,7 @@ Variance: -18m 2s
 
 ## 版本与发布信息
 
-- **当前版本**：0.1.2
+- **当前版本**：0.1.3
 - **支持 DSH**：0.2.1-rc.2（实测）
 - **许可证**：MIT（见 `LICENSE`）
 - **问题反馈 / 更新日志**：GitHub Issues 与 Releases（见仓库链接）。

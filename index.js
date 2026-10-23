@@ -207,7 +207,7 @@ export function apply(ctx, config = {}) {
     lines.push(`Actual: ${record.actualMs === null ? 'unknown (clock continuity lost)' : formatDuration(record.actualMs)}${record.continuity === 'continuous' ? ' (monotonic, host-measured)' : record.continuity === 'restarted' ? ' (wall clock, process restarted)' : record.continuity === 'clock-changed' ? ' (monotonic; wall clock changed)' : ''}`);
     if (record.plannedMs !== null) {
       lines.push(`Planned: ${formatDuration(record.plannedMs)}`);
-      if (record.actualMs !== null) lines.push(`Variance: ${formatSignedMs(record.actualMs - record.plannedMs)}`);
+      if (record.actualMs !== null) lines.push(`Variance: ${formatSignedMs(record.actualMs - record.plannedMs)}${record.continuity === 'continuous' ? '' : ' (estimated)'}`);
     }
     if (record.continuity !== 'continuous') lines.push(`Timing note: ${continuityNote(record.continuity)}`);
     return lines.join('\n');
@@ -216,24 +216,24 @@ export function apply(ctx, config = {}) {
   const taskClockTool = {
     name: 'task_clock',
     description:
-      'Host-measured task timing. Use it only for tasks whose duration matters (not for ordinary chat). '
-      + 'start begins a task and records the expected duration; check reports host-measured elapsed, plan and remaining; '
-      + 'finish closes it with a verifiable actual duration; list shows recent records; '
-      + 'now returns the current local time and time zone (use it whenever you need to say what time it is, instead of guessing). '
-      + 'Elapsed time is measured by the DSH host, never estimated from the conversation, and survives across turns through the same taskId. '
-      + 'If DSH restarted mid-task the result is marked uncertain instead of inventing continuity.',
+      'Use only when current time or task duration matters, not for ordinary chat. '
+      + 'now returns the current local date/time and time zone; call it before stating the current time—never guess. '
+      + 'start records the planned duration; check reports elapsed and remaining; finish records actual duration and variance; list shows saved tasks. '
+      + 'Elapsed time is host-measured, never inferred from chat history. '
+      + 'It uses a monotonic clock while the process is continuous; after a restart it may be estimated or unknown. '
+      + 'It does not automatically start tasks or cancel timed-out work.',
     parameters: {
       type: 'object',
       additionalProperties: false,
       required: ['action'],
       properties: {
         action: { type: 'string', enum: ['start', 'check', 'finish', 'list', 'now'], description: 'start | check | finish | list | now' },
-        taskId: { type: 'string', description: 'Task id. check/finish default to the running task of this session.' },
-        plannedSeconds: { type: 'number', description: 'Expected duration in seconds (start only, optional).' },
-        label: { type: 'string', description: 'Short human label (start only, optional).' },
-        outcome: { type: 'string', enum: ['completed', 'aborted'], description: 'finish outcome; default completed.' },
-        limit: { type: 'integer', description: 'list: maximum records (default 10, max 50).' },
-        allSessions: { type: 'boolean', description: 'list: include records from other sessions.' },
+        taskId: { type: 'string', description: "Task id; check/finish default to this session's running task." },
+        plannedSeconds: { type: 'number', description: 'Expected seconds (start).' },
+        label: { type: 'string', description: 'Optional label (start).' },
+        outcome: { type: 'string', enum: ['completed', 'aborted'], description: 'finish result: completed (default) or aborted.' },
+        limit: { type: 'integer', description: 'list: max records (default 10, max 50).' },
+        allSessions: { type: 'boolean', description: 'list: include other sessions.' },
       },
     },
     output: {
@@ -321,9 +321,24 @@ export function apply(ctx, config = {}) {
       if (records.length === 0) return { text: 'No task records.' };
       const lines = [`Recent tasks (${records.length}):`];
       for (const record of records) {
-        const duration = record.status === 'running'
-          ? `${formatDuration(Math.max(0, nowWall - record.startedWall))}+`
-          : record.actualMs === null ? 'unknown' : formatDuration(record.actualMs);
+        let duration;
+        if (record.status === 'running') {
+          const elapsed = computeElapsed(record, nowWall, nowMono);
+          if (elapsed.elapsedMs === null) {
+            duration = 'unknown';
+          } else {
+            const note = elapsed.continuity === 'continuous'
+              ? ''
+              : elapsed.continuity === 'restarted'
+                ? ' (restarted, estimated)'
+                : elapsed.continuity === 'clock-changed'
+                  ? ' (wall clock changed)'
+                  : ' (unknown)';
+            duration = `${formatDuration(elapsed.elapsedMs)}+${note}`;
+          }
+        } else {
+          duration = record.actualMs === null ? 'unknown' : formatDuration(record.actualMs);
+        }
         const planned = record.plannedMs === null ? '' : ` / planned ${formatDuration(record.plannedMs)}`;
         lines.push(`- ${record.taskId} [${record.status}] actual ${duration}${planned}${record.label ? ` — ${record.label}` : ''}`);
       }
