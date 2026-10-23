@@ -361,7 +361,7 @@ export function apply(ctx, config = {}) {
     name: 'task_clock',
     description:
       'Use only when current time or task duration matters, not for ordinary chat. '
-      + 'now returns the current local date/time and time zone. Before stating the current time or making a time-of-day judgment, call now and use its fresh result; never infer the current time from earlier messages, injected snapshots, estimates, or elapsed durations, or reuse a previous now result. If a long-running tool call or substantial delay occurs after querying now, query again before reporting the time. For task duration, use task_clock\'s measured value; do not call now merely to report elapsed time. '
+      + 'now returns the current local date/time and time zone. Before stating the current time or making a time-of-day judgment, call now for a fresh result; never infer the current time from earlier messages, injected snapshots, estimates, or elapsed durations, or reuse a previous result. Report HH:MM by default, truncating seconds rather than rounding; include seconds when explicitly asked. If a long-running tool call or substantial delay follows the query, query again before reporting. For task duration, use task_clock\'s measured value; do not call now merely to report elapsed time. '
       + 'start records the planned duration; check reports elapsed and remaining; finish records actual duration and variance; list shows saved tasks. '
       + 'Elapsed time is host-measured, never inferred from chat history. '
       + 'It uses a monotonic clock while the process is continuous; after a DSH restart within the same OS session it bridges the gap with system uptime, and after an OS restart it may be an estimate or unknown. '
