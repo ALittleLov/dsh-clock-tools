@@ -1,0 +1,12 @@
+# dsh-clock-tools 的 bundle patch。
+#
+# 只插入一个全局插件行，不碰任何 preset：
+#   - 不影响 Standard / Cordis / PTC / Minimal 的插件列表
+#   - 不与 time-context 冲突、不注入时间消息
+#   - 通过 agent/created 把 task_clock 注册到每个顶层 Agent
+#
+# 包名由 Profile 的 node_modules 解析；不要在发行版里写本机绝对路径。
+
+- insert:
+    - id: clock-tools
+      name: 'dsh-clock-tools'

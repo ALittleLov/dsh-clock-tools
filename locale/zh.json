@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "DSH Clock Tools",
+    "description": "Host-measured task timing for DSH agents: a task_clock tool that does not touch presets"
+  }
+}
