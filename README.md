@@ -4,7 +4,7 @@
 
 为 DSH 本地 AI Agent 提供可核实的任务计时能力，把预计耗时、实际耗时和任务状态分开管理。
 
-> **项目状态**：0.1.6 已发布到 GitHub（[仓库](https://github.com/ALittleLov/dsh-clock-tools) · [Releases](https://github.com/ALittleLov/dsh-clock-tools/releases)）。
+> **项目状态**：0.1.7 已发布到 GitHub（[仓库](https://github.com/ALittleLov/dsh-clock-tools) · [Releases](https://github.com/ALittleLov/dsh-clock-tools/releases)）。
 >
 > **已验证环境**：DSH 0.2.1-rc.2（仅此版本实测；其他版本未验证）。
 
@@ -300,7 +300,7 @@ Variance: -18m 2s
 
 ## 版本与发布信息
 
-- **当前版本**：0.1.6
+- **当前版本**：0.1.7
 - **支持 DSH**：0.2.1-rc.2（实测）
 - **许可证**：MIT（见 `LICENSE`）
 - **问题反馈 / 更新日志**：GitHub Issues 与 Releases（见仓库链接）。

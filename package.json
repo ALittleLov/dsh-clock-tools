@@ -1,6 +1,6 @@
 {
   "name": "dsh-clock-tools",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Host-measured task timing for DSH agents: a task_clock tool that does not touch presets",
   "type": "module",
   "main": "index.js",
