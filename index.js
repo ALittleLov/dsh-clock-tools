@@ -1,11 +1,15 @@
 /**
  * dsh-clock-tools — 任务计时的独立插件（第一层：Clock Tools）。
  *
- * 只提供 `task_clock`（start / check / finish / list / now），不注入任何时间消息、
+ * 只提供 `task_clock`（start / check / finish / list / now），不注入时间消息、
  * 不覆盖任何 preset。通过 `agent/created` 把工具注册到每个顶层 Agent 的
  * 作用域，因此在同一 Profile 下使用不同 preset 的 Agent 都能用。
  *
  * 零 DSH 包依赖：只用 node 内置模块与 ctx 服务。
+ *
+ * 0.1.8 起默认通过 `ctx.systemPrompt.context()` 注入三条固定的时间规则
+ * （不产生 user 消息）。关闭方式：profile patch 的 `config.injectTimeRules: false`
+ * 优先；其次在 `~/.dsh/clock-context/config.json` 写 `{"injectTimeRules": false}`。
  */
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
@@ -46,6 +50,28 @@ const WALL_JUMP_THRESHOLD_MS = 2000;
 const BOOT_TOLERANCE_MS = 2000;
 const DEFAULT_LIST_LIMIT = 10;
 const MAX_LIST_LIMIT = 50;
+
+// 固定注入文本。改这里等于改所有安装的行为提示，改前想清楚。
+const TIME_RULES = [
+  '时间规则（dsh-clock-tools）：',
+  '- 报时间、写时间戳前先查 task_clock，禁止推算；查不到的不写。',
+  '- 查到原样用：HH:MM 截断，不四舍五入，问秒才给秒。',
+  '- 跨度不等于工时，有断档分段说。',
+].join('\n');
+
+// 读 <storeDir>/config.json 里的 injectTimeRules。
+// 任何异常（不存在、不是 JSON、字段不是布尔）都返回 undefined，由调用方回退默认值。
+function readFileInjectTimeRules(filePath) {
+  try {
+    const parsed = JSON.parse(readFileSync(filePath, 'utf8'));
+    if (parsed === null || typeof parsed !== 'object') return undefined;
+    if (parsed.injectTimeRules === false) return false;
+    if (parsed.injectTimeRules === true) return true;
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 const TASK_STATUS = new Set(['running', 'completed', 'aborted', 'uncertain']);
 const CONTINUITY = new Set(['continuous', 'resumed', 'resumed-gap', 'restarted', 'clock-changed', 'unknown']);
@@ -241,6 +267,30 @@ export function apply(ctx, config = {}) {
   const filePath = join(fileDir, 'tasks.json');
   let fileWriteChain = Promise.resolve();
   let storeReady = Promise.resolve();
+
+  // 时间规则注入：默认开。优先级（高 → 低）：
+  //   1. profile patch 的 config.injectTimeRules（升/降都由它最终决定）
+  //   2. <storeDir>/config.json 的 injectTimeRules
+  //   3. 默认 true
+  // 文件不存在、读不出、解析失败、字段不是布尔，一律当作「未配置」。
+  const configPath = join(fileDir, 'config.json');
+  const configuredRule = config?.injectTimeRules;
+  const injectTimeRules = configuredRule === false
+    ? false
+    : configuredRule === true
+      ? true
+      : (readFileInjectTimeRules(configPath) ?? true);
+
+  if (injectTimeRules) {
+    ctx.inject?.(['systemPrompt'], (scope) => {
+      scope.systemPrompt.context({
+        name: 'clock-tools:time-rules',
+        // 排在 SUBAGENT_DELEGATION(120) 之后，和其他运行时上下文一起读。
+        order: 130,
+        text: TIME_RULES,
+      });
+    });
+  }
 
   function persist() {
     fileWriteChain = fileWriteChain.then(async () => {

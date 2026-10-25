@@ -4,7 +4,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { apply, _internals } from '../index.js';
@@ -15,6 +15,7 @@ const BASE_MONO = 1000;
 function makeHarness({ roots = ['root'] } = {}) {
   const tools = [];
   const created = [];
+  const contexts = [];
   const agentMap = new Map();
   const ctx = {
     logger: { warn() {}, info() {} },
@@ -26,6 +27,17 @@ function makeHarness({ roots = ['root'] } = {}) {
     effect(fn) {
       fn();
       return () => {};
+    },
+    inject(services, register) {
+      if (!services.includes('systemPrompt')) return () => {};
+      return register({
+        systemPrompt: {
+          context(spec) {
+            contexts.push(spec);
+            return () => {};
+          },
+        },
+      });
     },
     agents: {
       roots: () => roots.map((id) => agentMap.get(id)).filter(Boolean),
@@ -48,15 +60,16 @@ function makeHarness({ roots = ['root'] } = {}) {
     agentMap.set(id, agent);
     return agent;
   }
-  return { ctx, tools, created, makeAgent };
+  return { ctx, tools, created, makeAgent, contexts };
 }
 
 function startup(options = {}) {
   _internals.setClock({ wall: () => BASE_WALL, mono: () => BASE_MONO });
   _internals.setBootId('boot-A');
+  const storeDir = options.storeDir ?? mkdtempSync(join(tmpdir(), 'clock-tools-test-'));
   const h = makeHarness(options);
-  apply(h.ctx, { storeDir: mkdtempSync(join(tmpdir(), 'clock-tools-test-')) });
-  return h;
+  apply(h.ctx, { ...options.config, storeDir });
+  return { ...h, storeDir };
 }
 
 test('顶层 Agent 注册 task_clock；子 Agent 默认不注册', () => {
@@ -293,5 +306,41 @@ test('Linux boot_id 不同：判定系统重启，标 resumed-gap', () => {
   } finally {
     _internals.setPlatformBootId(null);
   }
+});
+
+// ---- 0.1.8：时间规则注入（systemPrompt.context，默认开） ----
+
+test('时间规则默认注入：三条固定文本进 systemPrompt.context，不注册工具、不产生消息', () => {
+  const h = startup({ roots: ['root'] });
+  assert.equal(h.contexts.length, 1);
+  const [spec] = h.contexts;
+  assert.equal(spec.name, 'clock-tools:time-rules');
+  assert.equal(spec.order, 130);
+  assert.match(spec.text, /报时间、写时间戳前先查 task_clock，禁止推算；查不到的不写。/);
+  assert.match(spec.text, /查到原样用：HH:MM 截断，不四舍五入，问秒才给秒。/);
+  assert.match(spec.text, /跨度不等于工时，有断档分段说。/);
+  // 正文固定为「标题 + 三条」，不多不少。
+  assert.equal(spec.text.split('\n').filter((line) => line.startsWith('- ')).length, 3);
+  assert.equal(h.tools.length, 0);
+});
+
+test('关闭时间规则：profile config.injectTimeRules=false 优先，其次 config.json', () => {
+  // ① profile patch 的 config 优先：即使文件写着 true 也不注入
+  const dir1 = mkdtempSync(join(tmpdir(), 'clock-tools-test-'));
+  writeFileSync(join(dir1, 'config.json'), JSON.stringify({ injectTimeRules: true }), 'utf8');
+  const offByConfig = startup({ roots: ['root'], storeDir: dir1, config: { injectTimeRules: false } });
+  assert.equal(offByConfig.contexts.length, 0);
+
+  // ② 没有 profile config 时看 <storeDir>/config.json
+  const dir2 = mkdtempSync(join(tmpdir(), 'clock-tools-test-'));
+  writeFileSync(join(dir2, 'config.json'), JSON.stringify({ injectTimeRules: false }), 'utf8');
+  const offByFile = startup({ roots: ['root'], storeDir: dir2 });
+  assert.equal(offByFile.contexts.length, 0);
+
+  // ③ 文件坏了 / 字段无效：回退默认开
+  const dir3 = mkdtempSync(join(tmpdir(), 'clock-tools-test-'));
+  writeFileSync(join(dir3, 'config.json'), '{not json', 'utf8');
+  const fallback = startup({ roots: ['root'], storeDir: dir3 });
+  assert.equal(fallback.contexts.length, 1);
 });
 

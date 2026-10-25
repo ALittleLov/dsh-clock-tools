@@ -4,7 +4,7 @@
 
 为 DSH 本地 AI Agent 提供可核实的任务计时能力，把预计耗时、实际耗时和任务状态分开管理。
 
-> **项目状态**：0.1.7 已发布到 GitHub（[仓库](https://github.com/ALittleLov/dsh-clock-tools) · [Releases](https://github.com/ALittleLov/dsh-clock-tools/releases)）。
+> **项目状态**：0.1.8 已发布到 GitHub（[仓库](https://github.com/ALittleLov/dsh-clock-tools) · [Releases](https://github.com/ALittleLov/dsh-clock-tools/releases)）。
 >
 > **已验证环境**：DSH 0.2.1-rc.2（仅此版本实测；其他版本未验证）。
 
@@ -98,6 +98,40 @@ Variance = actualMs - plannedMs
 | PTC | ✅（`run_code` / `ptc-dispatch`） | 未单独验证 |
 
 插件在 Profile 层注册，不依赖 preset。但这不代表所有 DSH 版本、所有 Profile 或所有平台都已验证。
+
+### 6. 时间规则注入（0.1.8 起，默认开启）
+
+插件默认通过 `ctx.systemPrompt.context()` 把三条固定规则放进每次模型请求的运行时上下文，**不产生 user 消息**，不作为对话消息出现在历史里：
+
+```text
+时间规则（dsh-clock-tools）：
+- 报时间、写时间戳前先查 task_clock，禁止推算；查不到的不写。
+- 查到原样用：HH:MM 截断，不四舍五入，问秒才给秒。
+- 跨度不等于工时，有断档分段说。
+```
+
+文本是包内常量，只读本地配置决定开/关，不发网络请求。
+
+关闭方式按优先级从高到低：
+
+1. Profile patch 的 config（最高优先）：
+
+   ```yaml
+   - id: clock-tools
+     name: 'dsh-clock-tools'
+     config:
+       injectTimeRules: false
+   ```
+
+2. 配置文件 `~/.dsh/clock-context/config.json`：
+
+   ```json
+   { "injectTimeRules": false }
+   ```
+
+两者都没有设置时默认注入。文件不存在、不是合法 JSON、字段不是布尔值，一律当作“未配置”，仍然默认开启。配置文件与任务记录放在同一目录（如果改过 `storeDir`，`config.json` 也跟着走）。
+
+开关在 DSH 启动、插件加载时读取；改完需要完全退出并重启 DSH 才生效。
 
 ## 工作原理
 
@@ -239,7 +273,13 @@ Variance: -18m 2s
 
 ## 让 Agent 真的用起来
 
-装好插件只解决“查得到”这一半。AI 最常见的错不是查不到，是**不查**——凭印象往上加时间，或者把上次查到的当现在。工具描述里的提醒拦不住它，得写进项目的 `AGENTS.md`（或系统提示），让它每轮都读到：
+装好插件只解决“查得到”这一半。AI 最常见的错不是查不到，是**不查**——凭印象往上加时间，或者把上次查到的当现在。
+
+0.1.8 起插件默认自动注入这三条规则（见上方「时间规则注入」），不需要再手动抄。只有这几种情况才建议写进 `AGENTS.md`：
+
+- 你主动关掉了注入（profile config 或 `config.json`）；
+- 当前 DSH 版本不提供 `systemPrompt.context()`，注入没有生效；
+- 规则要覆盖到注入范围之外的 Agent 或工具链。
 
 ```markdown
 - 报时间、写时间戳前先查，禁止推算；查不到的不写。
@@ -247,11 +287,12 @@ Variance: -18m 2s
 - 跨度不等于工时，有断档分段说。
 ```
 
-照抄这三条就够。不写的话插件照样能用，但报时质量取决于模型自觉——这是插件补不了的。
+不写也照样能用，但报时质量取决于模型自觉——注入只是把三条规则摆到它眼前，不是强制执行。
 
 ## Token 与系统开销
 
-- 不轮询、不每秒调用模型、不持续注入时间消息。
+- 不轮询、不每秒调用模型。
+- 0.1.8 起默认每请求注入三条固定规则（约 110 字符，含 1 行标题）。按中文粗估约 100 tokens / 请求（未实测）；关闭后为 0。关闭方法见上方「时间规则注入」。
 - 但工具 Schema 会进入每个模型请求的工具列表：**实测 schema 1,927 字符，约 480 tokens / 请求**（按 4 字符/token 估算，±15%）。
 - 子 Agent 默认不注册，可用配置项 `includeSubagents: true` 打开。
 - 没有真实 Token usage 测量，因此不给出“节省比例”。
@@ -262,6 +303,7 @@ Variance: -18m 2s
 经代码核对：
 
 - **无网络请求**：只使用 Node 内置模块（`fs` / `path` / `os` / `crypto`）与 `Intl`，没有 `fetch`、HTTP 客户端或遥测。
+- **注入内容固定**：时间规则是包内常量，不含本机路径、用户名或任务数据；开关只读本地 `config.json`。
 - 任务记录路径：`~/.dsh/clock-context/tasks.json`。
 - 记录字段包含：`taskId`、`sessionId`、`label`（用户/模型提供的标签，会写入文件）、`plannedMs`、`startedWall`、`startedMono`、`startedUptime`、`startedBootWall`、`lastSeenUptime`、`lastSeenMono`、`lastSeenWall`、`lastSeenBootId`、`accumulatedMs`、`platformBootId`、`baseBootId`、`baseMono`、`baseUptime`、`baseWall`、`baseBootWall`、`bootId`、`endedWall`、`endedMono`、`actualMs`、`wallJump`、`continuity`、`createdAt`。
 - 数据不自动过期；卸载插件不会删除记录。
@@ -274,7 +316,7 @@ Variance: -18m 2s
 1. Agent 必须主动调用计时工具；插件不会自动开始或结束计时。
 2. 没有自动超时中止功能：它只测量和报告耗时，不拥有中止 DSH 任务的权限。
 3. 预计耗时是预测，不是测量。
-4. **插件不能强制 Agent 调用 `now`**：工具描述里写了「报时间前必须查、不要复用旧结果」，但这只是提示，模型仍可能不查而自行推算。真正强制需要宿主层支持；可行的补法是写进项目的 `AGENTS.md`，见上方「让 Agent 真的用起来」。
+4. **插件不能强制 Agent 调用 `now`**：工具描述和 0.1.8 的规则注入都只是提示，模型仍可能不查而自行推算。真正强制需要宿主层支持；注入加 `AGENTS.md` 只提高触发概率，不构成保证。
 
 ### 时间可信度与精度
 
@@ -290,7 +332,7 @@ Variance: -18m 2s
 
 ## 测试
 
-- 单元测试：**16 个**（分段不重复、系统重启 `resumed-gap`、连续两次重启、墙钟回退 `unknown`、Linux boot_id 分支）。
+- 单元测试：**18 个**（分段不重复、系统重启 `resumed-gap`、连续两次重启、墙钟回退 `unknown`、Linux boot_id 分支、时间规则默认注入、关闭优先级）。
 - 发行包解压后从目录加载：`SMOKE_OK`。
 - 四种 preset 真实会话：Standard / Cordis / Minimal / PTC 均完成 start → check → finish → list。
 - **真实跨重启（0.1.4）**：正常关闭 DSH → 约 30 秒后重开 → `check` 显示 `Elapsed: 1m 6s (resumed, uptime-bridged)`，`finish` 保持 `Actual: 1m 10s (resumed, uptime-bridged)`，与「重启前 + 空档 + 重启后」一致。
@@ -300,7 +342,7 @@ Variance: -18m 2s
 
 ## 版本与发布信息
 
-- **当前版本**：0.1.7
+- **当前版本**：0.1.8
 - **支持 DSH**：0.2.1-rc.2（实测）
 - **许可证**：MIT（见 `LICENSE`）
 - **问题反馈 / 更新日志**：GitHub Issues 与 Releases（见仓库链接）。
