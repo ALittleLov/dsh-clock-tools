@@ -567,8 +567,16 @@ export function apply(ctx, config = {}) {
   const includeSubagents = config?.includeSubagents === true;
   const owned = new Map();
 
+  // DSH 0.2.2-rc.3 移除了 AgentRegistry.roots()（rc.1/rc.2 用它返回无 owner 的顶层
+  // Agent），rc.3 保留官方子 Agent 判定 session.header.origin === 'subagent'
+  // （见 dsh-api-session-controller 的 isSubagentSession）。旧版仍优先走 roots()。
+  const isTopLevel = (agent) => {
+    if (typeof ctx.agents?.roots === 'function') return ctx.agents.roots().includes(agent);
+    return agent?.session?.header?.origin !== 'subagent';
+  };
+
   ctx.on('agent/created', ({ agent }) => {
-    if (!includeSubagents && !ctx.agents.roots().includes(agent)) return;
+    if (!includeSubagents && !isTopLevel(agent)) return;
     const dispose = agent.ctx.effect(() => {
       const off = agent.ctx.tools.register(taskClockTool);
       return () => off();

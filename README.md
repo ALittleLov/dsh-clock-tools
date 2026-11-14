@@ -4,9 +4,11 @@
 
 为 DSH 本地 AI Agent 提供可核实的任务计时能力，把预计耗时、实际耗时和任务状态分开管理。
 
-> **项目状态**：0.1.8 已发布到 GitHub（[仓库](https://github.com/ALittleLov/dsh-clock-tools) · [Releases](https://github.com/ALittleLov/dsh-clock-tools/releases)）。
+> **项目状态**：0.1.9 已发布到 GitHub（[仓库](https://github.com/ALittleLov/dsh-clock-tools) · [Releases](https://github.com/ALittleLov/dsh-clock-tools/releases)）。
 >
-> **已验证环境**：DSH 0.2.1-rc.2（仅此版本实测；其他版本未验证）。
+> **已验证环境**：DSH 0.2.1-rc.2、0.2.2-rc.3（其他版本未验证）。
+>
+> **兼容性提示**：0.2.2-rc.3 移除了 `AgentRegistry.roots()`。0.1.8 及更早版本在该运行时下会在创建或恢复会话时抛 `TypeError: ctx.agents.roots is not a function`，导致会话不可用。0.1.9 起同时支持两条路径：运行时仍有 `roots()` 时沿用原顶层判定，没有时按 `session.header.origin === 'subagent'` 判定。
 
 ## 为什么需要这个项目？
 
